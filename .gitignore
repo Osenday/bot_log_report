@@ -1,0 +1,6 @@
+# senstive data
+docs/
+data/
+
+# config
+**/.DS_Store
