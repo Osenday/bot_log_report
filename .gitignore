@@ -1,6 +1,92 @@
-# senstive data
-docs/
-data/
+# ==========================================
+# ENTORNOS VIRTUALES Y GESTORES (UV / PIP)
+# ==========================================
+.venv/
+venv/
+ENV/
+env/
+.python-version
+.uv/
+uv.lock
 
-# config
-**/.DS_Store
+# ==========================================
+# CIENCIA DE DATOS Y JUPYTER NOTEBOOKS
+# ==========================================
+data/*
+!data/.gitkeep
+data/raw/*
+!data/raw/.gitkeep
+data_processed/
+docs/
+*.csv
+*.parquet
+*.pickle
+*.pkl
+*.npy
+*.npz
+*.h5
+*.hd5
+*.sqlite
+*.db
+
+# Modelos entrenados y checkpoints
+models/
+*.joblib
+*.onnx
+*.pb
+*.pt
+*.pth
+
+# Jupyter Notebooks (archivos temporales y checkpoints)
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+local_notebooks/
+
+# ==========================================
+# VARIABLES DE ENTORNO Y CONFIGURACION
+# ==========================================
+.env
+.env.local
+.env.dev
+.env.prod
+.env.*.local
+!*.example  # Se recomienda subir un '.env.example' sin password reales
+
+# ==========================================
+# DOCKER
+# ==========================================
+# Ignorar archivos locales de Docker pero conservar el Dockerfile base
+.dockerignore
+docker-compose.override.yml
+*.dockerfile
+!Dockerfile
+
+# ==========================================
+# ARTIFACTOS DE PYTHON (CACHES Y COMPILADOS)
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.cache/
+
+# ==========================================
+# SISTEMA OPERATIVO Y IDEs (VS Code / Mac)
+# ==========================================
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# PyCharm / IntelliJ
+.idea/
