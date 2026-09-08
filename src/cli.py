@@ -123,7 +123,7 @@ def imprimir_resumen(resultado: ResultadoEjecucion) -> None:
     Output:
         None. Escribe en la salida estándar.
     """
-    etiqueta = " (simulación, no se escribió nada)" if resultado.dry_run else ""
+    etiqueta = " (dry-run activado, no se hicieron modificaciones)" if resultado.dry_run else ""
     print(f"\nResumen de la ejecución{etiqueta}")
     print(f"{'fecha':<12} {'operaciones':>12} {'nuevos':>8}")
     print("-" * 34)
