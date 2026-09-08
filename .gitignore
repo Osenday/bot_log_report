@@ -12,7 +12,7 @@ uv.lock
 # ==========================================
 # CIENCIA DE DATOS Y JUPYTER NOTEBOOKS
 # ==========================================
-# Ignorar todo en data
+# Configuración de data/ para mantener .gitkeep
 data/*
 !data/.gitkeep
 # Des-ignorar explícitamente los directorios
@@ -24,6 +24,9 @@ data/processed/*
 # Excluir los .gitkeep de ser ignorados
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+# Mantener reports/
+reports/*
+!reports/.gitkeep
 
 docs/
 *.csv
