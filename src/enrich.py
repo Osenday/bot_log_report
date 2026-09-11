@@ -2,15 +2,21 @@
 
 Une las piezas que extrajo `parsers` con los registros que agrupó `reader`: localiza la
 línea de entrada, indexa las consultas a ADManager y resuelve quién es el solicitante y
-quién el target. Aquí se aplica también el filtro de endpoint, así que nada que no sea un
-`users_admin/resetuser` sale de este módulo.
+quién el target. Aquí se aplica también el filtro de endpoint, así que de este módulo sólo
+salen las operaciones de los endpoints que se pidieron reportar.
 """
 
 from dataclasses import dataclass
 
 from .config import ENDPOINT_OBJETIVO
 from .normalize import es_valor_nulo, norm
-from .parsers import parse_adm_raw, parse_consultas_usuario, parse_entrada
+from .parsers import (
+    parse_adm_raw,
+    parse_consultas_usuario,
+    parse_entrada,
+    parse_sap,
+    parse_ticket,
+)
 from .reader import Operation
 
 
@@ -37,15 +43,26 @@ class Usuario:
 
 @dataclass
 class OperacionReset:
-    """Una operación `users_admin/resetuser` ya resuelta y lista para volverse una fila.
+    """Una operación del bot ya resuelta y lista para volverse una fila del reporte.
+
+    Nació para `users_admin/resetuser` y conserva el nombre; los campos que sólo usa el alta
+    de usuarios (`sap/register_user`) van al final y traen valor por omisión, de modo que
+    una operación de reseteo se construye igual que antes.
 
     Campos:
         operation_id (str): identificador único de la operación en el log.
         timestamp (str): marca de tiempo de la línea de entrada del bot.
         status (int): código HTTP final devuelto por el bot.
-        solicitante (Usuario): usuario que pidió el reseteo.
-        target (Usuario): usuario al que se le iba a resetear la contraseña.
+        solicitante (Usuario): usuario que pidió la operación.
+        target (Usuario): usuario sobre el que se iba a operar.
         adm_raw (dict | None): respuesta cruda de ADManager, necesaria para el 503/504.
+        endpoint (str): endpoint del que salió la operación; decide qué reglas de negocio
+            se le aplican y qué `accion` y `sistema` lleva la fila.
+        tratamiento (str): parámetro `treatment` del alta ("señor" / "señora").
+        puesto (str): parámetro `job` del alta, el puesto que se pidió dar de alta.
+        sap (dict | None): respuesta de SAP al alta (`{'estatus', 'mensaje'}`).
+        ticket_creado (bool): `True` si se llegó a crear el ticket de control.
+        ticket_cerrado (bool): `True` si ese ticket llegó a cerrarse.
     """
 
     operation_id: str
@@ -54,6 +71,12 @@ class OperacionReset:
     solicitante: Usuario
     target: Usuario
     adm_raw: dict | None = None
+    endpoint: str = ENDPOINT_OBJETIVO
+    tratamiento: str = ""
+    puesto: str = ""
+    sap: dict | None = None
+    ticket_creado: bool = False
+    ticket_cerrado: bool = False
 
 
 def _campo(datos: dict, clave: str) -> str:
@@ -123,22 +146,31 @@ def indexar_usuarios(operacion: Operation) -> dict[str, dict | None]:
     return indice
 
 
-def enriquecer(operacion: Operation) -> OperacionReset | None:
+def enriquecer(
+    operacion: Operation, endpoints: tuple[str, ...] = (ENDPOINT_OBJETIVO,)
+) -> OperacionReset | None:
     """Resuelve una operación cruda del log en una `OperacionReset` completa.
 
-    Recorre los registros para localizar la línea de entrada y el último bloque ADM-Raw, y
-    aplica el filtro de endpoint: sólo los `users_admin/resetuser` llegan al reporte.
+    Recorre los registros para localizar la línea de entrada, el último bloque ADM-Raw, la
+    respuesta de SAP y el rastro del ticket de control, y aplica el filtro de endpoint: sólo
+    las operaciones de los endpoints pedidos llegan al reporte.
 
     Input:
         operacion (Operation): operación cruda agrupada por `operation_Id`.
+        endpoints (tuple[str, ...]): endpoints que se quieren reportar. Por omisión sólo el
+            reseteo de ADManager, que es el comportamiento histórico del proceso.
 
     Output:
-        OperacionReset | None: `None` si la operación no tiene línea de entrada o no es un
-        reseteo de ADManager; en caso contrario, la operación con ambos usuarios resueltos.
+        OperacionReset | None: `None` si la operación no tiene línea de entrada o su
+        endpoint no es de los pedidos; en caso contrario, la operación con ambos usuarios
+        resueltos.
     """
     entrada = None
     timestamp = operacion.timestamp
     adm_raw = None
+    sap = None
+    ticket_creado = False
+    ticket_cerrado = False
     for rec in operacion.records:
         if entrada is None:
             candidata = parse_entrada(rec.message)
@@ -147,7 +179,23 @@ def enriquecer(operacion: Operation) -> OperacionReset | None:
         adm = parse_adm_raw(rec.message)
         if adm is not None:
             adm_raw = adm
-    if entrada is None or not entrada["endpoint"].endswith(ENDPOINT_OBJETIVO):
+        respuesta_sap = parse_sap(rec.message)
+        if respuesta_sap is not None:
+            sap = respuesta_sap
+        ticket = parse_ticket(rec.message)
+        if ticket is not None and ticket["url"].startswith("incidents"):
+            if ticket["metodo"] == "POST":
+                ticket_creado = True
+            elif ticket["metodo"] == "PUT" and ticket["url"].endswith("/close"):
+                ticket_cerrado = True
+    if entrada is None:
+        return None
+
+    endpoint = next(
+        (e for e in endpoints if entrada["endpoint"].endswith(e)),
+        None,
+    )
+    if endpoint is None:
         return None
 
     indice = indexar_usuarios(operacion)
@@ -162,4 +210,10 @@ def enriquecer(operacion: Operation) -> OperacionReset | None:
             entrada["target"], indice.get(norm(entrada["target"]))
         ),
         adm_raw=adm_raw,
+        endpoint=endpoint,
+        tratamiento=entrada["tratamiento"],
+        puesto=entrada["puesto"],
+        sap=sap,
+        ticket_creado=ticket_creado,
+        ticket_cerrado=ticket_cerrado,
     )

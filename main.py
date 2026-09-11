@@ -5,6 +5,8 @@ resultado. Toda la lógica vive en los módulos de `src/`.
 
 Uso:
     python main.py                                     ejecución diaria (log más reciente)
+    python main.py --endpoint register_user            reporta las altas de usuarios en SAP
+    python main.py --endpoint todos                    reporta los dos servicios
     python main.py --date 2026-08-30                   reprocesa un día pasado
     python main.py --from 2026-08-29 --to 2026-08-31   recuperación de un rango
     python main.py --all                               carga inicial de todo el histórico
@@ -40,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
             todas=args.todas,
             dry_run=args.dry_run,
             strict=args.strict,
+            seleccion=args.seleccion,
         )
     except ValidacionFallida as exc:
         print(f"Validación fallida, no se escribió nada: {exc}", file=sys.stderr)

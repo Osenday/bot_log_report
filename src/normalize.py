@@ -9,8 +9,12 @@ import unicodedata
 
 from .config import (
     COMPARAR_OFICINA_POR_TOKENS,
+    MARCADOR_CITY_CLUB,
     MARCADOR_CORPORATIVO,
+    PREFIJO_GERENTE,
+    PREFIJO_SUBGERENTE,
     PREFIJOS_PRIVILEGIADOS,
+    TRATAMIENTOS_VALIDOS,
     VALORES_NULOS_AD,
 )
 
@@ -109,3 +113,72 @@ def tiene_privilegios(descripcion: str) -> bool:
         `PREFIJOS_PRIVILEGIADOS`.
     """
     return norm(descripcion).startswith(PREFIJOS_PRIVILEGIADOS)
+
+
+def es_city_club(ou_name: str) -> bool:
+    """Indica si un usuario pertenece a City Club según su OU de ADManager.
+
+    En los logs la OU de esos usuarios es "OAT/Tiendas/City Club"; se busca la subcadena
+    normalizada para que el nombre exacto de la OU pueda cambiar sin romper la regla.
+
+    Input:
+        ou_name (str): valor crudo del campo OU_NAME de ADManager.
+
+    Output:
+        bool: `True` si la OU contiene el marcador de City Club.
+    """
+    return MARCADOR_CITY_CLUB in norm(ou_name)
+
+
+def tratamiento_valido(tratamiento: str) -> bool:
+    """Indica si el tratamiento que llegó en la URL es uno de los que acepta el bot.
+
+    Input:
+        tratamiento (str): valor crudo del parámetro `treatment` (por ejemplo "señora").
+
+    Output:
+        bool: `True` si, ya normalizado, es "senor" o "senora".
+    """
+    return norm(tratamiento) in TRATAMIENTOS_VALIDOS
+
+
+def es_numero_empleado(valor: str) -> bool:
+    """Indica si el identificador del usuario objetivo es un número de empleado.
+
+    El bot devuelve 400 cuando `target_employee_id` no es numérico (en los logs llegó a
+    venir un `sAMAccountName` como "Caphum165").
+
+    Input:
+        valor (str): valor crudo del parámetro `target_employee_id`.
+
+    Output:
+        bool: `True` si el valor tiene contenido y todos sus caracteres son dígitos.
+    """
+    return str(valor).strip().isdigit()
+
+
+def es_gerente(descripcion: str) -> bool:
+    """Indica si el puesto que el usuario ya tiene en ADManager es de gerente.
+
+    Se compara con `startswith` y no con `in` justamente para que "Subgerente" no cuente
+    como gerente.
+
+    Input:
+        descripcion (str): valor crudo del campo DESCRIPTION de ADManager.
+
+    Output:
+        bool: `True` si la descripción normalizada empieza con "gerente".
+    """
+    return norm(descripcion).startswith(PREFIJO_GERENTE)
+
+
+def es_subgerente(descripcion: str) -> bool:
+    """Indica si el puesto que el usuario ya tiene en ADManager es de subgerente.
+
+    Input:
+        descripcion (str): valor crudo del campo DESCRIPTION de ADManager.
+
+    Output:
+        bool: `True` si la descripción normalizada empieza con "subgerente".
+    """
+    return norm(descripcion).startswith(PREFIJO_SUBGERENTE)

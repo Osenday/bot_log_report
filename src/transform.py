@@ -1,8 +1,9 @@
 """Construcción de la tabla de staging a partir de un `.log`.
 
-Produce la capa `data/processed/`: una fila por operación `resetuser`. Es **determinista**
-por diseño — no contiene `updated_at` ni ningún valor derivado del reloj —, así que
-regenerarla con el mismo log de entrada produce siempre el mismo resultado byte a byte.
+Produce la capa `data/processed/`: una fila por operación de los endpoints que se hayan
+pedido (`reset_user`, `register_user` o `todos`). Es **determinista** por diseño — no
+contiene `updated_at` ni ningún valor derivado del reloj —, así que regenerarla con el mismo
+log de entrada produce siempre el mismo resultado byte a byte.
 """
 
 import uuid
@@ -11,24 +12,56 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import ACCION, COLUMNAS_STAGING, SISTEMA, UUID_NAMESPACE
+from .config import (
+    ACCION,
+    ACCIONES,
+    COLUMNAS_STAGING,
+    ENDPOINTS_POR_SELECCION,
+    SELECCION_POR_DEFECTO,
+    SISTEMA,
+    SISTEMAS,
+    UUID_NAMESPACE,
+)
 from .enrich import OperacionReset, enriquecer
 from .outcomes import resolver_resultado
 from .reader import agrupar_operaciones
 
 
-def operaciones_reset(path: Path) -> Iterator[OperacionReset]:
-    """Recorre un `.log` y emite sólo sus operaciones de reseteo de ADManager.
+def endpoints_de(seleccion: str = SELECCION_POR_DEFECTO) -> tuple[str, ...]:
+    """Traduce la etiqueta que se pidió en la terminal a los endpoints que hay que leer.
+
+    Input:
+        seleccion (str): `reset_user`, `register_user` o `todos`.
+
+    Output:
+        tuple[str, ...]: endpoints correspondientes.
+        Lanza `ValueError` si la etiqueta no es una de las tres.
+    """
+    if seleccion not in ENDPOINTS_POR_SELECCION:
+        opciones = ", ".join(sorted(ENDPOINTS_POR_SELECCION))
+        raise ValueError(
+            f"Selección de endpoint desconocida: {seleccion} (use {opciones})"
+        )
+    return ENDPOINTS_POR_SELECCION[seleccion]
+
+
+def operaciones_reset(
+    path: Path, seleccion: str = SELECCION_POR_DEFECTO
+) -> Iterator[OperacionReset]:
+    """Recorre un `.log` y emite sólo las operaciones de los endpoints pedidos.
 
     Input:
         path (Path): ruta al archivo `.log` crudo.
+        seleccion (str): `reset_user`, `register_user` o `todos`. Por omisión sólo los
+            reseteos de ADManager, que es el comportamiento histórico del proceso.
 
     Output:
-        Iterator[OperacionReset]: una operación resuelta por cada `users_admin/resetuser`
-        del archivo; el resto (por ejemplo `sap/register_user`) se descarta.
+        Iterator[OperacionReset]: una operación resuelta por cada operación del archivo
+        cuyo endpoint esté en la selección; el resto se descarta.
     """
+    endpoints = endpoints_de(seleccion)
     for operacion in agrupar_operaciones(path).values():
-        op = enriquecer(operacion)
+        op = enriquecer(operacion, endpoints)
         if op is not None:
             yield op
 
@@ -52,8 +85,8 @@ def operacion_a_fila(op: OperacionReset) -> dict:
         "operation_id": op.operation_id,
         "solicitante": op.solicitante.sam,
         "target": op.target.sam,
-        "accion": ACCION,
-        "sistema": SISTEMA,
+        "accion": ACCIONES.get(op.endpoint, ACCION),
+        "sistema": SISTEMAS.get(op.endpoint, SISTEMA),
         "nombre_solicitante": op.solicitante.nombre_completo,
         "nombre_target": op.target.nombre_completo,
         "oficina_solicitante": op.solicitante.oficina,
@@ -63,18 +96,20 @@ def operacion_a_fila(op: OperacionReset) -> dict:
     }
 
 
-def tabla_desde_log(path: Path) -> pd.DataFrame:
+def tabla_desde_log(path: Path, seleccion: str = SELECCION_POR_DEFECTO) -> pd.DataFrame:
     """Procesa un `.log` completo y devuelve su tabla de staging.
 
-    Determinista: mismo log de entrada, mismo DataFrame de salida, byte por byte.
+    Determinista: mismo log de entrada y misma selección, mismo DataFrame de salida, byte
+    por byte.
 
     Input:
         path (Path): ruta al archivo `.log` crudo.
+        seleccion (str): `reset_user`, `register_user` o `todos`.
 
     Output:
-        pd.DataFrame: una fila por operación `resetuser`, con las columnas
+        pd.DataFrame: una fila por operación de los endpoints pedidos, con las columnas
         `COLUMNAS_STAGING` y ordenada por (`timestamp`, `operation_id`).
     """
-    filas = [operacion_a_fila(op) for op in operaciones_reset(path)]
+    filas = [operacion_a_fila(op) for op in operaciones_reset(path, seleccion)]
     df = pd.DataFrame(filas, columns=COLUMNAS_STAGING)
     return df.sort_values(["timestamp", "operation_id"]).reset_index(drop=True)

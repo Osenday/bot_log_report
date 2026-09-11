@@ -7,12 +7,22 @@ quede reducido a orquestar y `pipeline.py` no sepa nada de `argparse`.
 import argparse
 import logging
 
-from .config import REPORT_PATH
+from .config import (
+    ENDPOINTS_POR_SELECCION,
+    REPORT_PATH,
+    SELECCION_POR_DEFECTO,
+    SELECCION_REGISTER,
+    SELECCION_RESET,
+    SELECCION_TODOS,
+)
 from .pipeline import ResultadoEjecucion
 
 DESCRIPCION = """
-Actualiza la tabla `tabla_reporte_bot` a partir de los logs del bot, tomando en cuenta
-únicamente los reseteos de usuarios de ADManager (users_admin/resetuser).
+Actualiza la tabla `tabla_reporte_bot` a partir de los logs del bot.
+
+Con `--endpoint` se elige qué servicio se reporta: los reseteos de contraseña de ADManager
+(users_admin/resetuser), las altas de usuarios en SAP (sap/register_user) o los dos. Por
+omisión sólo los reseteos, que es como se construyó el reporte histórico.
 
 El proceso es idempotente: reejecutar un día ya cargado no duplica ni altera registros.
 """
@@ -20,12 +30,20 @@ El proceso es idempotente: reejecutar un día ya cargado no duplica ni altera re
 EJEMPLOS = """
 Ejemplos:
   python main.py                                     ejecución diaria (log más reciente)
+  python main.py --endpoint register_user            reporta las altas de usuarios en SAP
+  python main.py --endpoint todos --all              carga los dos servicios, todo el histórico
   python main.py --date 2026-08-30                   reprocesa un día pasado
   python main.py --from 2026-08-29 --to 2026-08-31   recuperación de un rango
   python main.py --all                               carga inicial de todo el histórico
   python main.py --date 2026-08-30 --dry-run         informa sin escribir nada
   python main.py --strict                            no carga nada si hay algún aviso
 """
+
+AYUDA_ENDPOINT = {
+    SELECCION_RESET: "sólo los reseteos de contraseña de ADManager",
+    SELECCION_REGISTER: "sólo las altas de usuarios en SAP",
+    SELECCION_TODOS: "los dos servicios en la misma tabla",
+}
 
 
 def construir_parser() -> argparse.ArgumentParser:
@@ -35,14 +53,26 @@ def construir_parser() -> argparse.ArgumentParser:
         Ninguno.
 
     Output:
-        argparse.ArgumentParser: parser configurado con las opciones de selección de fechas
-        (`--date`, `--from`, `--to`, `--all`), `--dry-run` y el control de verbosidad.
+        argparse.ArgumentParser: parser configurado con la selección de endpoints
+        (`--endpoint`), las opciones de selección de fechas (`--date`, `--from`, `--to`,
+        `--all`), `--dry-run` y el control de verbosidad.
     """
     parser = argparse.ArgumentParser(
         prog="main.py",
         description=DESCRIPCION,
         epilog=EJEMPLOS,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--endpoint",
+        dest="seleccion",
+        choices=list(ENDPOINTS_POR_SELECCION),
+        default=SELECCION_POR_DEFECTO,
+        help=(
+            "qué servicio del bot se reporta: "
+            + "; ".join(f"{k}, {v}" for k, v in AYUDA_ENDPOINT.items())
+            + f" (por omisión: {SELECCION_POR_DEFECTO})"
+        ),
     )
     parser.add_argument(
         "--date",
@@ -125,6 +155,7 @@ def imprimir_resumen(resultado: ResultadoEjecucion) -> None:
     """
     etiqueta = " (dry-run activado, no se hicieron modificaciones)" if resultado.dry_run else ""
     print(f"\nResumen de la ejecución{etiqueta}")
+    print(f"Endpoint: {resultado.seleccion}")
     print(f"{'fecha':<12} {'operaciones':>12} {'nuevos':>8}")
     print("-" * 34)
     for fila in resultado.fechas:

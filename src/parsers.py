@@ -1,14 +1,19 @@
 """Expresiones regulares y extracción de datos de los mensajes del log.
 
-Tres patrones cubren todo lo que necesita el reporte:
+Cinco patrones cubren todo lo que necesita el reporte:
 
 1. `ENTRY_RE`  — la línea de entrada del bot: trae `solicitante`, `target` y el status final
    de la operación. Se distingue de las llamadas a ADManager porque el status va *fuera* de
    las comillas (`"HTTP/1.1" 404` contra `"HTTP/1.1 200 "`) y porque no lleva método HTTP.
+   Sirve igual para los dos endpoints: sólo cambian los nombres de los parámetros.
 2. `SEARCH_RE` — las consultas `SearchUser`, con su `filter` (qué usuario se buscó) y su
    `Raw Response` en JSON. Una `UsersList` vacía es lo que resuelve los sub-casos del 404.
 3. `ADM_RAW_RE` — el bloque `| ADM-Raw response |`, del que salen el mensaje de error del
    503 y la razón del timeout del 504.
+4. `SAP_RE`    — la respuesta de SAP al alta de un usuario, que dice en texto si el usuario
+   ya existía (estatus 208).
+5. `TICKET_RE` — las llamadas a ProactivaNet, que dicen si el ticket de control se creó y
+   si llegó a cerrarse (los dos sub-casos del 202 en el alta).
 
 Este módulo NO conoce reglas de negocio: sólo extrae texto y lo convierte en estructuras de
 Python.
@@ -33,19 +38,50 @@ ADM_RAW_RE = re.compile(
     r"^ADM-Raw response \| status: (?P<status>\d+) \| (?P<resto>.*)$", re.S
 )
 
+SAP_RE = re.compile(r"SAP raw response:\s*(?P<body>\{.*\})\s*$", re.S)
+
+TICKET_RE = re.compile(
+    r"ProactivanetRawClient,\s*method\s*=\s*(?P<metodo>\w+),\s*url\s*=\s*(?P<url>[^,]+),"
+)
+
+# Cada endpoint nombra distinto a los mismos dos usuarios: el reseteo los manda como
+# `sAMAccountName_*` y el alta como `requester_username` / `target_employee_id`. Se busca
+# en orden y gana el primero que venga en la URL.
+PARAMS_SOLICITANTE = ("sAMAccountName_requester", "requester_username")
+PARAMS_TARGET = ("sAMAccountName_target", "target_employee_id")
+
+
+def _primer_parametro(params: dict[str, list[str]], nombres: tuple[str, ...]) -> str:
+    """Devuelve el valor del primer parámetro de la lista que venga en la query string.
+
+    Input:
+        params (dict[str, list[str]]): resultado de `parse_qs()` sobre la query.
+        nombres (tuple[str, ...]): nombres a probar, en orden de preferencia.
+
+    Output:
+        str: el primer valor encontrado, o `''` si no viene ninguno de los nombres.
+    """
+    for nombre in nombres:
+        valores = params.get(nombre)
+        if valores:
+            return valores[0]
+    return ""
+
 
 def parse_entrada(message: str) -> dict | None:
     """Extrae la línea de entrada del bot: endpoint, estatus final y usuarios.
 
     Es la única línea que trae el status HTTP final de la operación y los dos usuarios
-    involucrados, que vienen como parámetros de la query string.
+    involucrados, que vienen como parámetros de la query string. `tratamiento` y `puesto`
+    sólo los manda el alta de usuarios; en un reseteo quedan vacíos.
 
     Input:
         message (str): mensaje de un `LogRecord`.
 
     Output:
         dict | None: `None` si la línea no es una entrada del bot; si lo es,
-        `{'endpoint': str, 'status': int, 'solicitante': str, 'target': str}`.
+        `{'endpoint': str, 'status': int, 'solicitante': str, 'target': str,
+        'tratamiento': str, 'puesto': str}`.
     """
     m = ENTRY_RE.match(message.strip())
     if not m:
@@ -55,8 +91,67 @@ def parse_entrada(message: str) -> dict | None:
     return {
         "endpoint": url.path.lstrip("/"),
         "status": int(m["status"]),
-        "solicitante": params.get("sAMAccountName_requester", [""])[0],
-        "target": params.get("sAMAccountName_target", [""])[0],
+        "solicitante": _primer_parametro(params, PARAMS_SOLICITANTE),
+        "target": _primer_parametro(params, PARAMS_TARGET),
+        "tratamiento": _primer_parametro(params, ("treatment",)),
+        "puesto": _primer_parametro(params, ("job",)),
+    }
+
+
+def parse_sap(message: str) -> dict | None:
+    """Extrae la respuesta de SAP al alta de un usuario.
+
+    SAP no usa códigos propios: dice en el texto de `Mensaje` si el alta se hizo o si el
+    usuario ya existía. El cuerpo viene como literal de Python y envuelto en una clave cuyo
+    nombre puede cambiar (`MT_RespAltaUsrResetPwd`), así que se toma el primer diccionario
+    que haya dentro.
+
+    Input:
+        message (str): mensaje de un `LogRecord`.
+
+    Output:
+        dict | None: `None` si el mensaje no trae respuesta de SAP o no se pudo evaluar; si
+        la trae, `{'estatus': str, 'mensaje': str}`.
+    """
+    m = SAP_RE.search(message)
+    if not m:
+        return None
+    try:
+        body = ast.literal_eval(m["body"].strip())
+    except (ValueError, SyntaxError):
+        return None
+    if not isinstance(body, dict):
+        return None
+    interno = next((v for v in body.values() if isinstance(v, dict)), {})
+    return {
+        "estatus": str(interno.get("Estatus", "")).strip(),
+        "mensaje": str(interno.get("Mensaje", "")).strip(),
+    }
+
+
+def parse_ticket(message: str) -> dict | None:
+    """Extrae una llamada a ProactivaNet, de donde sale el estado del ticket de control.
+
+    El alta crea un ticket (`POST incidents`) y después lo escala, resuelve y cierra
+    (`PUT incidents/<id>/close`). Que falte alguno de esos pasos es lo que distingue los
+    dos sub-casos del estatus 202.
+
+    Input:
+        message (str): mensaje de un `LogRecord`.
+
+    Output:
+        dict | None: `None` si el mensaje no es una llamada a ProactivaNet; si lo es,
+        `{'metodo': str, 'url': str, 'code': str}`, donde `code` es el folio del ticket
+        (`REQ 2026-378990`) o `''` si la respuesta no lo trae.
+    """
+    m = TICKET_RE.search(message)
+    if not m:
+        return None
+    code = re.search(r"'Code':\s*'(?P<code>[^']*)'", message)
+    return {
+        "metodo": m["metodo"].strip().upper(),
+        "url": m["url"].strip(),
+        "code": code["code"].strip() if code else "",
     }
 
 

@@ -21,8 +21,16 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import ENDPOINTS_CONOCIDOS
-from .outcomes import MENSAJE_403_GENERICO, RESOLVERS
+from .config import (
+    ENDPOINTS_CONOCIDOS,
+    ENDPOINTS_POR_SELECCION,
+    SELECCION_POR_DEFECTO,
+)
+from .outcomes import (
+    MENSAJE_403_GENERICO,
+    MENSAJE_403_REGISTER_GENERICO,
+    resolvers_de,
+)
 from .parsers import SEARCH_RE, parse_entrada
 from .reader import HEADER_RE, agrupar_operaciones
 
@@ -144,19 +152,26 @@ def validar_log(path: Path) -> list[Hallazgo]:
     return hallazgos
 
 
-def validar_staging(staging: pd.DataFrame, fecha: str) -> list[Hallazgo]:
+def validar_staging(
+    staging: pd.DataFrame, fecha: str, seleccion: str = SELECCION_POR_DEFECTO
+) -> list[Hallazgo]:
     """Comprueba que la tabla producida para un día sea coherente antes de guardarla.
 
     Input:
         staging (pd.DataFrame): tabla de staging de un día.
         fecha (str): fecha procesada, sólo para los mensajes.
+        seleccion (str): endpoints que se pidieron reportar; decide contra qué reglas de
+            negocio se comprueba la cobertura de códigos HTTP.
 
     Output:
         list[Hallazgo]: vacía si la tabla cumple todas las invariantes.
     """
     if staging.empty:
         return [
-            Hallazgo(AVISO, f"{fecha}: el log no contiene ninguna operación resetuser")
+            Hallazgo(
+                AVISO,
+                f"{fecha}: el log no contiene ninguna operación de {seleccion}",
+            )
         ]
 
     hallazgos: list[Hallazgo] = []
@@ -173,8 +188,13 @@ def validar_staging(staging: pd.DataFrame, fecha: str) -> list[Hallazgo]:
             Hallazgo(ERROR, f"{fecha}: {sin_resultado} filas sin resultado_final")
         )
 
-    # Un código nuevo significa una regla de negocio que todavía no está implementada.
-    desconocidos = sorted(set(staging["status_http"]) - set(RESOLVERS))
+    # Un código nuevo significa una regla de negocio que todavía no está implementada. Cada
+    # endpoint tiene su propia tabla de códigos, así que se comprueba contra la unión de las
+    # que entraron en esta selección.
+    codigos_conocidos: set[int] = set()
+    for endpoint in ENDPOINTS_POR_SELECCION.get(seleccion, ()):
+        codigos_conocidos |= set(resolvers_de(endpoint))
+    desconocidos = sorted(set(staging["status_http"]) - codigos_conocidos)
     if desconocidos:
         hallazgos.append(
             Hallazgo(
@@ -185,7 +205,11 @@ def validar_staging(staging: pd.DataFrame, fecha: str) -> list[Hallazgo]:
         )
 
     # Un 403 sin causa identificada apunta a una validación del bot que no modelamos.
-    genericos = int((staging["resultado_final"] == MENSAJE_403_GENERICO).sum())
+    genericos = int(
+        staging["resultado_final"]
+        .isin([MENSAJE_403_GENERICO, MENSAJE_403_REGISTER_GENERICO])
+        .sum()
+    )
     if genericos:
         hallazgos.append(
             Hallazgo(

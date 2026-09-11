@@ -14,8 +14,10 @@ import pandas as pd
 from .config import (
     COLUMNAS_REPORTE,
     PREFIJO_STAGING,
+    PREFIJOS_STAGING,
     PROCESSED_DIR,
     REPORT_PATH,
+    SELECCION_POR_DEFECTO,
     ZONA_HORARIA,
 )
 
@@ -39,29 +41,37 @@ def escribir_csv_atomico(df: pd.DataFrame, destino: Path) -> Path:
     return destino
 
 
-def ruta_staging(fecha: str) -> Path:
-    """Devuelve la ruta del CSV de staging que corresponde a una fecha.
+def ruta_staging(fecha: str, seleccion: str = SELECCION_POR_DEFECTO) -> Path:
+    """Devuelve la ruta del CSV de staging que corresponde a una fecha y una selección.
+
+    Cada selección de endpoints tiene su propio prefijo, así que reprocesar un día con otra
+    selección no pisa el archivo intermedio de la anterior.
 
     Input:
         fecha (str): fecha en formato `YYYY-MM-DD`.
+        seleccion (str): `reset_user`, `register_user` o `todos`.
 
     Output:
-        Path: `data/processed/resetuser_<fecha>.csv` (puede no existir todavía).
+        Path: `data/processed/<prefijo><fecha>.csv` (puede no existir todavía).
     """
-    return PROCESSED_DIR / f"{PREFIJO_STAGING}{fecha}.csv"
+    prefijo = PREFIJOS_STAGING.get(seleccion, PREFIJO_STAGING)
+    return PROCESSED_DIR / f"{prefijo}{fecha}.csv"
 
 
-def guardar_staging(df: pd.DataFrame, fecha: str) -> Path:
+def guardar_staging(
+    df: pd.DataFrame, fecha: str, seleccion: str = SELECCION_POR_DEFECTO
+) -> Path:
     """Persiste la tabla de staging de un día en `data/processed/`.
 
     Input:
         df (pd.DataFrame): tabla de staging producida por `transform.tabla_desde_log()`.
         fecha (str): fecha en formato `YYYY-MM-DD`.
+        seleccion (str): `reset_user`, `register_user` o `todos`.
 
     Output:
         Path: la ruta donde quedó escrito el CSV.
     """
-    return escribir_csv_atomico(df, ruta_staging(fecha))
+    return escribir_csv_atomico(df, ruta_staging(fecha, seleccion))
 
 
 def cargar_reporte() -> pd.DataFrame:
